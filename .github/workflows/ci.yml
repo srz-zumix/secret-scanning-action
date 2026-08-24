@@ -87,11 +87,47 @@ jobs:
           grep -q 'secret-scanning local check --staged' "$hooks_dir/pre-commit"
           grep -q 'secret-scanning local check' "$hooks_dir/pre-push"
 
+  test-hook-install-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: secret-scanning-action
+          persist-credentials: false
+      - name: Remove .git
+        run: rm -rf secret-scanning-action/.git
+      - name: Create clean repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hook-only-repo
+          cd /tmp/hook-only-repo
+          git init
+          git config user.name test
+          git config user.email test@example.com
+          echo clean > README.md
+          git add README.md
+          git commit -m init
+      - name: Install hook without scan
+        uses: ./secret-scanning-action
+        with:
+          working-directory: /tmp/hook-only-repo
+          hooks: pre-push
+          run-scan: false
+      - name: Verify hook was installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          hooks_dir=$(git -C /tmp/hook-only-repo rev-parse --git-path hooks)
+          test -x "$hooks_dir/pre-push"
+          grep -q 'secret-scanning local check' "$hooks_dir/pre-push"
+
   ci-status-check:
     runs-on: ubuntu-latest
     needs:
       - test-staged-scan
       - test-hook-install
+      - test-hook-install-only
     if: failure()
     steps:
       - name: CI Status Check Failed
