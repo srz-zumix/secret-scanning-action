@@ -1,0 +1,98 @@
+name: Self Test
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  test-staged-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cache:
+          - true
+          - false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: secret-scanning-action
+          persist-credentials: false
+      - name: Remove .git
+        run: rm -rf secret-scanning-action/.git
+      - name: Create staged secret fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/local-scan-repo
+          cd /tmp/local-scan-repo
+          git init
+          git config user.name test
+          git config user.email test@example.com
+          echo clean > README.md
+          git add README.md
+          git commit -m init
+          prefix=ghp_
+          body=$(printf 'A%.0s' $(seq 1 36))
+          printf 'token=%s%s\n' "$prefix" "$body" > secret.txt
+          git add secret.txt
+      - name: Run secret scan
+        id: staged-scan
+        continue-on-error: true
+        uses: ./secret-scanning-action
+        with:
+          working-directory: /tmp/local-scan-repo
+          args: --staged
+          cache: ${{ matrix.cache }}
+      - name: Verify staged secret was detected
+        shell: bash
+        run: |
+          test "${{ steps.staged-scan.outcome }}" = failure
+
+  test-hook-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: secret-scanning-action
+          persist-credentials: false
+      - name: Remove .git
+        run: rm -rf secret-scanning-action/.git
+      - name: Create clean repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hook-repo
+          cd /tmp/hook-repo
+          git init
+          git config user.name test
+          git config user.email test@example.com
+          echo clean > README.md
+          git add README.md
+          git commit -m init
+      - name: Install hooks
+        uses: ./secret-scanning-action
+        with:
+          working-directory: /tmp/hook-repo
+          hooks: |
+            pre-commit
+            pre-push
+          args: --staged
+      - name: Verify hooks were installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          hooks_dir=$(git -C /tmp/hook-repo rev-parse --git-path hooks)
+          test -x "$hooks_dir/pre-commit"
+          test -x "$hooks_dir/pre-push"
+          grep -q 'secret-scanning local check --staged' "$hooks_dir/pre-commit"
+          grep -q 'secret-scanning local check' "$hooks_dir/pre-push"
+
+  ci-status-check:
+    runs-on: ubuntu-latest
+    needs:
+      - test-staged-scan
+      - test-hook-install
+    if: failure()
+    steps:
+      - name: CI Status Check Failed
+        run: exit 1

@@ -1,0 +1,10 @@
+packages:
+  - type: github_release
+    repo_owner: srz-zumix
+    repo_name: gh-secure-kit
+    description: gh extension for GitHub security automation
+    asset: "{{.OS}}-{{.Arch}}"
+    format: raw
+    github_artifact_attestations:
+      signer_workflow: srz-zumix/gh-secure-kit/.github/workflows/release.yml
+    github_immutable_release: true
