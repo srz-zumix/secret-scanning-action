@@ -20,11 +20,6 @@ inputs:
     default: false
     type: boolean
     required: false
-  hook-backup:
-    description: 'Back up an existing hook before replacing it'
-    default: false
-    type: boolean
-    required: false
   working-directory:
     description: 'Directory where the scan and optional hook installation run'
     default: '.'
@@ -123,9 +118,7 @@ runs:
               rm -f "${hook_path}"
             fi
 
-            if [ '${{ inputs.hook-backup }}' = 'true' ]; then
-              rm -f "${hook_path}.gh-secure-kit.bak"
-            fi
+            rm -f "${hook_path}.gh-secure-kit.bak"
           done < "${hooks_file}"
 
           rm -rf "${state_dir}"
@@ -134,13 +127,12 @@ runs:
       shell: bash
       env:
         INPUTS_HOOK_FORCE: ${{ inputs.hook-force }}
-        INPUTS_HOOK_BACKUP: ${{ inputs.hook-backup }}
         HOOKS_FILE: ${{ steps.prepare-hook-cleanup.outputs.hooks-file }}
         GH_SECURE_KIT: ${{ steps.gh-secure-kit.outputs.path }}
       run: |
         set -euo pipefail
 
-        HOOK_OPTIONS=()
+        HOOK_OPTIONS=(--backup)
         HOOKS=()
         while read -r hook; do
           [ -n "${hook}" ] || continue
@@ -149,9 +141,6 @@ runs:
 
         if [ "${INPUTS_HOOK_FORCE}" = 'true' ]; then
           HOOK_OPTIONS+=(--force)
-        fi
-        if [ "${INPUTS_HOOK_BACKUP}" = 'true' ]; then
-          HOOK_OPTIONS+=(--backup)
         fi
         set -x
         "${GH_SECURE_KIT}" secret-scanning local hook install \
