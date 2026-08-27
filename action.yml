@@ -115,7 +115,7 @@ runs:
         read -r -a HOOK_NAMES <<< "${HOOKS}"
 
         set -x
-        "${GH_SECURE_KIT}" secret-scanning local hook install --backup --force "${HOOK_NAMES[@]}"
+        "${GH_SECURE_KIT}" secret-scanning local hook install --backup "${HOOK_NAMES[@]}"
       working-directory: ${{ inputs.working-directory }}
     - name: Local secret scan
       id: secret-scan
