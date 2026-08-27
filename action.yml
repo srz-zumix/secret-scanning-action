@@ -24,6 +24,7 @@ inputs:
     default: true
     type: boolean
     required: false
+
 runs:
   using: 'composite'
   steps:
@@ -45,7 +46,6 @@ runs:
         GH_ENTERPRISE_TOKEN: ''
         AQUA_POLICY_CONFIG: aqua-policy.yaml
       run: |
-        set -euo pipefail
         export GH_TOKEN="${AQUA_GITHUB_TOKEN:-}"
         gh-secure-kit --version
         echo "path=$(aqua which gh-secure-kit)" >> "${GITHUB_OUTPUT}"
@@ -58,15 +58,11 @@ runs:
         INPUTS_HOOKS: ${{ inputs.hooks }}
         INPUTS_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
-        set -euo pipefail
-
-        STATE_DIR="$(mktemp -d "${RUNNER_TEMP}/secret-scanning-action-hooks.XXXXXX")"
-        HOOKS_FILE="${STATE_DIR}/hooks.list"
+        read -r -a HOOKS <<< "$(printf '%s' "${INPUTS_HOOKS}" | tr ',\r\n\t' '    ')"
         HOOKS_DIR="$(git -C "${INPUTS_WORKING_DIRECTORY}" rev-parse --git-path hooks)"
-        : > "${HOOKS_FILE}"
+        STATE_DIR="$(mktemp -d "${RUNNER_TEMP}/secret-scanning-action-hooks.XXXXXX")"
 
-        while read -r hook; do
-          [ -n "${hook}" ] || continue
+        for hook in "${HOOKS[@]}"; do
           case "${hook}" in
             pre-commit|pre-push) ;;
             *)
@@ -74,35 +70,27 @@ runs:
               exit 1
               ;;
           esac
-          printf '%s\n' "${hook}" >> "${HOOKS_FILE}"
           if [ -e "${HOOKS_DIR}/${hook}" ] || [ -L "${HOOKS_DIR}/${hook}" ]; then
             cp -a "${HOOKS_DIR}/${hook}" "${STATE_DIR}/${hook}.orig"
           fi
-        done < <(printf '%s' "${INPUTS_HOOKS}" | tr ',\r\n\t' '    ' | xargs -n1 printf '%s\n')
+        done
 
         {
+          echo "hooks=${HOOKS[*]}"
           echo "hooks-dir=${HOOKS_DIR}"
-          echo "hooks-file=${HOOKS_FILE}"
           echo "state-dir=${STATE_DIR}"
-          if [ -s "${HOOKS_FILE}" ]; then
-            echo "has-hooks=true"
-          else
-            echo "has-hooks=false"
-          fi
         } >> "${GITHUB_OUTPUT}"
     - uses: srz-zumix/post-run-action@42756f7452b9439d0365b7e087b2c364f54209c6 # v3.0.2
-      if: steps.prepare-hook-cleanup.outputs.has-hooks == 'true'
+      if: steps.prepare-hook-cleanup.outputs.hooks != ''
       with:
         shell: bash --noprofile --norc -eo pipefail {0}
         post-run: |
           state_dir='${{ steps.prepare-hook-cleanup.outputs.state-dir }}'
           hooks_dir='${{ steps.prepare-hook-cleanup.outputs.hooks-dir }}'
-          hooks_file='${{ steps.prepare-hook-cleanup.outputs.hooks-file }}'
+          hooks='${{ steps.prepare-hook-cleanup.outputs.hooks }}'
           [ -d "${state_dir}" ] || exit 0
-          [ -f "${hooks_file}" ] || exit 0
 
-          while IFS= read -r hook; do
-            [ -n "${hook}" ] || continue
+          for hook in ${hooks}; do
             hook_path="${hooks_dir}/${hook}"
             backup_path="${state_dir}/${hook}.orig"
 
@@ -114,28 +102,20 @@ runs:
             fi
 
             rm -f "${hook_path}.gh-secure-kit.bak"
-          done < "${hooks_file}"
+          done
 
           rm -rf "${state_dir}"
     - name: Install hooks
-      if: steps.prepare-hook-cleanup.outputs.has-hooks == 'true'
+      if: steps.prepare-hook-cleanup.outputs.hooks != ''
       shell: bash
       env:
-        HOOKS_FILE: ${{ steps.prepare-hook-cleanup.outputs.hooks-file }}
+        HOOKS: ${{ steps.prepare-hook-cleanup.outputs.hooks }}
         GH_SECURE_KIT: ${{ steps.gh-secure-kit.outputs.path }}
       run: |
-        set -euo pipefail
+        read -r -a HOOK_NAMES <<< "${HOOKS}"
 
-        HOOK_OPTIONS=(--backup --force)
-        HOOKS=()
-        while read -r hook; do
-          [ -n "${hook}" ] || continue
-          HOOKS+=("${hook}")
-        done < "${HOOKS_FILE}"
         set -x
-        "${GH_SECURE_KIT}" secret-scanning local hook install \
-          ${HOOK_OPTIONS[@]+"${HOOK_OPTIONS[@]}"} \
-          "${HOOKS[@]}"
+        "${GH_SECURE_KIT}" secret-scanning local hook install --backup --force "${HOOK_NAMES[@]}"
       working-directory: ${{ inputs.working-directory }}
     - name: Local secret scan
       id: secret-scan
@@ -145,17 +125,12 @@ runs:
         INPUTS_ARGS: ${{ inputs.args }}
         GH_SECURE_KIT: ${{ steps.gh-secure-kit.outputs.path }}
       run: |
-        set -euo pipefail
-
-        CHECK_OPTIONS=()
-        if [ -n "${INPUTS_ARGS}" ]; then
-          read -r -a CHECK_OPTIONS <<< "$(printf '%s' "${INPUTS_ARGS}" | tr '\r\n' '  ')"
-        fi
+        read -r -a CHECK_OPTIONS <<< "$(printf '%s' "${INPUTS_ARGS}" | tr '\r\n' '  ')"
 
         set -x
-        "${GH_SECURE_KIT}" secret-scanning local check \
-          ${CHECK_OPTIONS[@]+"${CHECK_OPTIONS[@]}"}
+        "${GH_SECURE_KIT}" secret-scanning local check "${CHECK_OPTIONS[@]}"
       working-directory: ${{ inputs.working-directory }}
+
 branding:
   icon: 'shield'
   color: 'red'
