@@ -86,7 +86,7 @@ jobs:
         env:
           HOOKS: ${{ matrix.hooks }}
         run: |
-          hooks_dir=$(git -C /tmp/hook-repo rev-parse --git-path hooks)
+          hooks_dir=$(git -C /tmp/hook-repo rev-parse --path-format=absolute --git-path hooks)
           for hook in ${HOOKS}; do
             test -x "${hooks_dir}/${hook}"
             grep -q 'secret-scanning local check' "${hooks_dir}/${hook}"

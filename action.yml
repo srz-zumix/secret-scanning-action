@@ -59,7 +59,7 @@ runs:
         INPUTS_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         read -r -a HOOKS <<< "$(printf '%s' "${INPUTS_HOOKS}" | tr ',\r\n\t' '    ')"
-        HOOKS_DIR="$(git -C "${INPUTS_WORKING_DIRECTORY}" rev-parse --git-path hooks)"
+        HOOKS_DIR="$(git -C "${INPUTS_WORKING_DIRECTORY}" rev-parse --path-format=absolute --git-path hooks)"
         STATE_DIR="$(mktemp -d "${RUNNER_TEMP}/secret-scanning-action-hooks.XXXXXX")"
 
         for hook in "${HOOKS[@]}"; do
