@@ -26,9 +26,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: srz-zumix/secret-scanning-action@v0
         with:
-          args: --staged
+          args: --rev-range ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
 ```
 
 ### Install pre-commit and pre-push hooks before scanning
@@ -67,4 +69,4 @@ jobs:
 - Hooks installed by this action are cleaned up automatically at job teardown so the repository is returned to its previous state.
 - Refer to the [gh-secure-kit README](https://github.com/srz-zumix/gh-secure-kit#scan-local-git-content-for-secrets) for supported local scan flags.
 - Hook installation uses the repository configured in `working-directory`.
-- Hook installation always runs with `--backup` and `--force`, and the backup files are removed during cleanup.
+- Hook installation runs with `--backup`: an existing hook that was *not* managed by gh-secure-kit is moved aside to `<hook>.gh-secure-kit.bak` before installing, while a hook already managed by gh-secure-kit is replaced in place. The generated hooks are rewritten to invoke the pinned `gh-secure-kit` binary directly, so they do not require the `gh` CLI at commit/push time.

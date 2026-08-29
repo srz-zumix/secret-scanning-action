@@ -114,8 +114,20 @@ runs:
       run: |
         read -r -a HOOK_NAMES <<< "${HOOKS}"
 
-        set -x
         "${GH_SECURE_KIT}" secret-scanning local hook install --backup "${HOOK_NAMES[@]}"
+
+        # The generated hooks invoke `gh secure-kit ...`, which needs the gh CLI
+        # and the secure-kit extension at run time. Rewrite them to call the
+        # pinned binary directly so the hooks run without gh being installed.
+        hooks_dir="$(git rev-parse --path-format=absolute --git-path hooks)"
+        for hook in "${HOOK_NAMES[@]}"; do
+          hook_path="${hooks_dir}/${hook}"
+          [ -f "${hook_path}" ] || continue
+          tmp="$(mktemp)"
+          sed "s|gh secure-kit |\"${GH_SECURE_KIT}\" |g" "${hook_path}" > "${tmp}"
+          cat "${tmp}" > "${hook_path}"
+          rm -f "${tmp}"
+        done
       working-directory: ${{ inputs.working-directory }}
     - name: Local secret scan
       id: secret-scan
@@ -125,9 +137,19 @@ runs:
         INPUTS_ARGS: ${{ inputs.args }}
         GH_SECURE_KIT: ${{ steps.gh-secure-kit.outputs.path }}
       run: |
-        read -r -a CHECK_OPTIONS <<< "$(printf '%s' "${INPUTS_ARGS}" | tr '\r\n' '  ')"
+        # Parse `args` with shell-style quoting so values such as
+        # --config "my path" keep their argument boundaries.
+        CHECK_OPTIONS=()
+        parsed_args="$(printf '%s' "${INPUTS_ARGS}" | xargs printf '%s\n')" || {
+          echo "::error::failed to parse the 'args' input; check that quotes are balanced"
+          exit 1
+        }
+        if [ -n "${parsed_args}" ]; then
+          while IFS= read -r opt; do
+            CHECK_OPTIONS+=("${opt}")
+          done <<< "${parsed_args}"
+        fi
 
-        set -x
         "${GH_SECURE_KIT}" secret-scanning local check "${CHECK_OPTIONS[@]}"
       working-directory: ${{ inputs.working-directory }}
 

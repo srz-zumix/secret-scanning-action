@@ -31,6 +31,20 @@ jobs:
           git commit -m init
           printf 'token=ghp_%s\n' "$(printf 'A%.0s' {1..36})" > secret.txt
           git add secret.txt
+      - name: Create clean control fixture
+        run: |
+          git init /tmp/clean-scan-repo
+          cd /tmp/clean-scan-repo
+          git config user.name test
+          git config user.email test@example.com
+          echo clean > README.md
+          git add README.md
+      - name: Control scan of clean content succeeds
+        uses: ./secret-scanning-action
+        with:
+          working-directory: /tmp/clean-scan-repo
+          args: --staged
+          cache: ${{ matrix.cache }}
       - name: Run secret scan
         id: staged-scan
         continue-on-error: true
@@ -92,6 +106,22 @@ jobs:
             grep -q 'secret-scanning local check' "${hooks_dir}/${hook}"
             [ "${hook}" != pre-commit ] || grep -q 'secret-scanning local check --staged' "${hooks_dir}/${hook}"
           done
+      - name: Execute installed pre-commit hook
+        if: contains(matrix.hooks, 'pre-commit')
+        working-directory: /tmp/hook-repo
+        run: |
+          hooks_dir=$(git rev-parse --path-format=absolute --git-path hooks)
+          # Clean index: the hook must succeed.
+          "${hooks_dir}/pre-commit"
+          # Staged secret: the hook must fail.
+          printf 'token=ghp_%s\n' "$(printf 'A%.0s' {1..36})" > secret.txt
+          git add secret.txt
+          if "${hooks_dir}/pre-commit"; then
+            echo "::error::pre-commit hook did not detect the staged secret"
+            exit 1
+          fi
+          git rm -f --cached secret.txt
+          rm -f secret.txt
 
   ci-status-check:
     runs-on: ubuntu-latest
