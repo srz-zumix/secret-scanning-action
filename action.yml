@@ -1,0 +1,158 @@
+name: 'Local Secret Scanning Action'
+description: 'Scan local git content for secrets with gh-secure-kit and optionally install pre-commit / pre-push hooks'
+author: 'srz-zumix'
+inputs:
+  args:
+    description: "Additional arguments passed to 'gh-secure-kit secret-scanning local check'"
+    default: ''
+    required: false
+  hooks:
+    description: 'Optional git hooks to install before scanning (pre-commit, pre-push). Separate values with spaces, commas, or newlines.'
+    default: ''
+    required: false
+  run-scan:
+    description: 'Run local secret scanning after optional hook installation'
+    default: true
+    type: boolean
+    required: false
+  working-directory:
+    description: 'Directory where the scan and optional hook installation run'
+    default: '.'
+    required: false
+  cache:
+    description: 'Whether or not to use aqua install cache'
+    default: true
+    type: boolean
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: srz-zumix/aqua-installer-cache@ac75fd8ae6d84e379f31f58bea79c04e24fe80cc # v1.0.0
+      id: aqua-cache
+      with:
+        working-directory: ${{ github.action_path }}
+        config-file: aqua.yaml
+      if: inputs.cache == 'true'
+    - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+      with:
+        aqua_version: v2.55.3
+        working_directory: ${{ github.action_path }}
+    - name: gh-secure-kit path
+      id: gh-secure-kit
+      shell: bash
+      env:
+        GH_HOST: github.com
+        GH_ENTERPRISE_TOKEN: ''
+        AQUA_POLICY_CONFIG: aqua-policy.yaml
+      run: |
+        export GH_TOKEN="${AQUA_GITHUB_TOKEN:-}"
+        gh-secure-kit --version
+        echo "path=$(aqua which gh-secure-kit)" >> "${GITHUB_OUTPUT}"
+      working-directory: ${{ github.action_path }}
+    - name: Prepare hook cleanup
+      id: prepare-hook-cleanup
+      if: inputs.hooks != ''
+      shell: bash
+      env:
+        INPUTS_HOOKS: ${{ inputs.hooks }}
+        INPUTS_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        read -r -a HOOKS <<< "$(printf '%s' "${INPUTS_HOOKS}" | tr ',\r\n\t' '    ')"
+        HOOKS_DIR="$(git -C "${INPUTS_WORKING_DIRECTORY}" rev-parse --path-format=absolute --git-path hooks)"
+        STATE_DIR="$(mktemp -d "${RUNNER_TEMP}/secret-scanning-action-hooks.XXXXXX")"
+
+        for hook in "${HOOKS[@]}"; do
+          case "${hook}" in
+            pre-commit|pre-push) ;;
+            *)
+              echo "::error::unsupported hook '${hook}'. Supported hooks: pre-commit, pre-push"
+              exit 1
+              ;;
+          esac
+          if [ -e "${HOOKS_DIR}/${hook}" ] || [ -L "${HOOKS_DIR}/${hook}" ]; then
+            cp -a "${HOOKS_DIR}/${hook}" "${STATE_DIR}/${hook}.orig"
+          fi
+        done
+
+        {
+          echo "hooks=${HOOKS[*]}"
+          echo "hooks-dir=${HOOKS_DIR}"
+          echo "state-dir=${STATE_DIR}"
+        } >> "${GITHUB_OUTPUT}"
+    - uses: srz-zumix/post-run-action@42756f7452b9439d0365b7e087b2c364f54209c6 # v3.0.2
+      if: steps.prepare-hook-cleanup.outputs.hooks != ''
+      with:
+        shell: bash --noprofile --norc -eo pipefail {0}
+        post-run: |
+          state_dir='${{ steps.prepare-hook-cleanup.outputs.state-dir }}'
+          hooks_dir='${{ steps.prepare-hook-cleanup.outputs.hooks-dir }}'
+          hooks='${{ steps.prepare-hook-cleanup.outputs.hooks }}'
+          [ -d "${state_dir}" ] || exit 0
+
+          for hook in ${hooks}; do
+            hook_path="${hooks_dir}/${hook}"
+            backup_path="${state_dir}/${hook}.orig"
+
+            if [ -e "${backup_path}" ] || [ -L "${backup_path}" ]; then
+              rm -f "${hook_path}"
+              mv "${backup_path}" "${hook_path}"
+            elif [ -f "${hook_path}" ] && grep -Fqx '# gh-secure-kit:secret-scanning-local' "${hook_path}"; then
+              rm -f "${hook_path}"
+            fi
+
+            rm -f "${hook_path}.gh-secure-kit.bak"
+          done
+
+          rm -rf "${state_dir}"
+    - name: Install hooks
+      if: steps.prepare-hook-cleanup.outputs.hooks != ''
+      shell: bash
+      env:
+        HOOKS: ${{ steps.prepare-hook-cleanup.outputs.hooks }}
+        GH_SECURE_KIT: ${{ steps.gh-secure-kit.outputs.path }}
+      run: |
+        read -r -a HOOK_NAMES <<< "${HOOKS}"
+
+        "${GH_SECURE_KIT}" secret-scanning local hook install --backup "${HOOK_NAMES[@]}"
+
+        # The generated hooks invoke `gh secure-kit ...`, which needs the gh CLI
+        # and the secure-kit extension at run time. Rewrite them to call the
+        # pinned binary directly so the hooks run without gh being installed.
+        hooks_dir="$(git rev-parse --path-format=absolute --git-path hooks)"
+        for hook in "${HOOK_NAMES[@]}"; do
+          hook_path="${hooks_dir}/${hook}"
+          [ -f "${hook_path}" ] || continue
+          tmp="$(mktemp)"
+          sed "s|gh secure-kit |\"${GH_SECURE_KIT}\" |g" "${hook_path}" > "${tmp}"
+          cat "${tmp}" > "${hook_path}"
+          rm -f "${tmp}"
+        done
+      working-directory: ${{ inputs.working-directory }}
+    - name: Local secret scan
+      id: secret-scan
+      if: inputs.run-scan == 'true'
+      shell: bash
+      env:
+        INPUTS_ARGS: ${{ inputs.args }}
+        GH_SECURE_KIT: ${{ steps.gh-secure-kit.outputs.path }}
+      run: |
+        # Parse `args` with shell-style quoting so values such as
+        # --config "my path" keep their argument boundaries.
+        CHECK_OPTIONS=()
+        parsed_args="$(printf '%s' "${INPUTS_ARGS}" | xargs printf '%s\n')" || {
+          echo "::error::failed to parse the 'args' input; check that quotes are balanced"
+          exit 1
+        }
+        if [ -n "${parsed_args}" ]; then
+          while IFS= read -r opt; do
+            CHECK_OPTIONS+=("${opt}")
+          done <<< "${parsed_args}"
+        fi
+
+        "${GH_SECURE_KIT}" secret-scanning local check "${CHECK_OPTIONS[@]}"
+      working-directory: ${{ inputs.working-directory }}
+
+branding:
+  icon: 'shield'
+  color: 'red'
