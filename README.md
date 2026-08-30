@@ -12,7 +12,7 @@ This action uses [gh-secure-kit](https://github.com/srz-zumix/gh-secure-kit) to 
 
 ## Usage
 
-### Scan staged changes
+### Scan pull request changes
 
 ```yaml
 name: Secret scan
