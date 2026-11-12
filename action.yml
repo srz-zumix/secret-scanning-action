@@ -28,7 +28,7 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - uses: srz-zumix/aqua-installer-cache@ac75fd8ae6d84e379f31f58bea79c04e24fe80cc # v1.0.0
+    - uses: srz-zumix/aqua-installer-cache@327ba57f985124e98d3db358fb3d18167243c9a6 # v1.0.1
       id: aqua-cache
       with:
         working-directory: ${{ github.action_path }}
